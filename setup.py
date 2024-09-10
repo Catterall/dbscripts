@@ -5,7 +5,7 @@ with open('README.md', 'r') as f:
 
 setup(
     name='dbscripts',
-    version='0.1.2',
+    version='0.1.32',
     author="KCatterall",
     license='MIT',
     url='https://github.com/Catterall/dbscripts',
@@ -14,7 +14,7 @@ setup(
     install_requires=[
         'pyodbc>=5.1.0'
     ],
-    description="A small Python package to quickly run database object scripts against a database without dependency issues.",
+    description="A small Python package for handling 'database scripts', including analysis and dependency management.",
     long_description=description,
     long_description_content_type='text/markdown',
 )

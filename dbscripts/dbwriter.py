@@ -8,17 +8,20 @@ from dbscripts.dbscripts import DBScript
 
 
 class DBWriter:
+    """
+    ? Used to run database script objects (`DBScript`, `DBScripts`) against a connected database.
+    """
     def __init__(self, conn: pyodbc.Connection):
-        """Used to run database script objects (`DBScript`, `DBScripts`) against a database via a connection.
-
+        """
         Args:
-            conn (pyodbc.Connection): the connection to the database to run scripts against.
+            conn (pyodbc.Connection): the `pyodbc` connection object to execute queries with.
         """
         self.conn = conn
         self.cursor = conn.cursor()
     
     def execute_script(self, script: DBScript, raise_exceptions: bool = True) -> None:
-        """Runs a database script object against the database.
+        """
+        ? Runs a database script object against the database.
 
         Args:
             script (DBScript): the database script object to run against the database.
@@ -35,8 +38,10 @@ class DBWriter:
                 raise e
             
     def execute_scripts(self, scripts: Iterable[DBScript], raise_exceptions: bool = True) -> None:
-        """Runs a list of database script objects against the database in order. You can use a `DBScripts` object to reorder a scripts list
-        such that it is safe to execute in order without the risk of missing dependencies.
+        """
+        ? Runs an iterable of database script objects against the database in order of the iterable. 
+        
+        * You can use a `DBScripts` object to reorder a scripts such that they are safe to execute in order without dependency issues.
 
         Args:
             scripts (Iterable[DBScript]): an iterable of database script objects.
@@ -55,7 +60,6 @@ class DBWriter:
 
 
 class IConnectionStringBuilder(ABC):
-    """An interface for connection string builders."""
     @abstractmethod
     def set_driver(self, driver: str):
         pass
@@ -86,7 +90,9 @@ class IConnectionStringBuilder(ABC):
 
 
 class MSSQLConnectionStringBuilder(IConnectionStringBuilder):
-    """A connection string builder for Microsoft SQL Server."""
+    """
+    ? A connection string builder for Microsoft SQL Server.
+    """
     def __init__(self):
         self.connection_string = {}
 
@@ -124,12 +130,16 @@ class MSSQLConnectionStringBuilder(IConnectionStringBuilder):
 
 
 class DBTypes(Enum):
-    """An enumerated type of supported database types."""
+    """
+    ? An enumerated type of supported database types.
+    """
     MSSQL = 'mssql'
 
 
 class ConnectionStringBuilderFactory:
-    """A factory class for connection string builders."""
+    """
+    ? A factory class for connection string builders.
+    """
     @staticmethod
     def get_builder(db_type: DBTypes) -> IConnectionStringBuilder:
         if db_type == DBTypes.MSSQL:
