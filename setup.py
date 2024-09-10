@@ -5,7 +5,7 @@ with open('README.md', 'r') as f:
 
 setup(
     name='dbscripts',
-    version='0.1.1',
+    version='0.1.2',
     author="KCatterall",
     license='MIT',
     url='https://github.com/Catterall/dbscripts',

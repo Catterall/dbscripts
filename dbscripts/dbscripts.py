@@ -39,7 +39,7 @@ class ISQLDialect(ABC):
 class MSSQL_Dialect(ISQLDialect):
     """The dialect for Microsoft SQL Server's SQL variation, Transact-SQL."""
     MSSQL_OBJECT_PATTERN = re.compile(
-        r'(?<!\.)\b(?:dbo\.)?([a-zA-Z_][a-zA-Z0-9_]+)\b(?!\s+AS|\s+TABLE|\s+VIEW|\s+TRIGGER|\s+PROCEDURE|\s+FUNCTION)',
+        r'(?:CREATE|ALTER|CREATE\s+OR\s+ALTER)\s+(?:PROCEDURE|TABLE|VIEW|FUNCTION|TRIGGER)\s+(?:\[(\w+)\]\.)?\[(\w+)\]',
         re.IGNORECASE
     )
 
@@ -62,7 +62,7 @@ class MSSQL_Dialect(ISQLDialect):
 
     def get_object_name(self, script_content: str) -> str | None:
         match = re.search(self.MSSQL_OBJECT_PATTERN, script_content)
-        return match.group(1) if match else None
+        return match.group(2) if match else None
 
 
 class DBScript:
@@ -93,7 +93,7 @@ class DBScript:
             self.contents = f.read()
         self.obj_name = self.sql_dialect.get_object_name(self.contents)
         if self.obj_name is None:
-            raise ImproperDBScriptFormatError('Could not determine the object name from the provided .sql file.')
+            raise ImproperDBScriptFormatError(f'Could not determine the object name from the provided .sql file at "{self.path}".')
 
 
 class DBScripts:
