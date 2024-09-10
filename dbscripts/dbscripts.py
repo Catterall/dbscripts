@@ -1,7 +1,7 @@
-from abc import ABC, abstractmethod
 import os
 import re
-from enum import IntEnum
+from abc import ABC, abstractmethod
+from collections import deque, defaultdict
 from typing import List, Dict
 
 
@@ -10,66 +10,59 @@ class ImproperDBScriptFormatError(Exception):
     pass
 
 
-class SQLObjectScriptTypes(IntEnum):
-    """The different types of recognized SQL object scripts."""
-    TABLE = 0
-    VIEW = 1
-    TRIGGER = 2
-    STORED_PROC = 3
-    SCALAR_FUNC = 4
-    TABLE_FUNC = 5
+class CyclicalDependenciesError(Exception):
+    """Raised when cyclical dependencies are encountered, which should not be possible for a set of database scripts."""
+    pass
 
 
 class ISQLDialect(ABC):
-    """An interface for different SQL dialects, such as `MSSQL_Dialect` (Transact-SQL)"""
+    """An interface for different SQL dialects, such as `MSSQL_Dialect` (Transact-SQL)."""
+    @abstractmethod
+    def strip_comments_and_strings(script_content: str) -> str:
+        """Removes comments and string identifiers from the script."""
+        pass
+    
     @abstractmethod
     def get_object_name(self, script_content: str) -> str | None:
         """Get the object name of the object script."""
         pass
 
     @abstractmethod
-    def get_script_type(self, script_content: str) -> SQLObjectScriptTypes:
-        """Get the object type of the object script. e.g. `SQLObjectScriptTypes.TABLE`"""
+    def is_valid_reference(self, obj_name: str, script: "DBScript") -> bool:
+        """
+        Determine whether an object name in a script is a valid reference. Attempts
+        to avoid false positives.
+        """
         pass
 
 
 class MSSQL_Dialect(ISQLDialect):
     """The dialect for Microsoft SQL Server's SQL variation, Transact-SQL."""
-    MSSQL_TABLE_PATTERN = re.compile(r'TABLE\s+(\[[a-zA-Z]+\])?\.?\[?([a-zA-Z]+)\]?', re.IGNORECASE)
-    MSSQL_VIEW_PATTERN = re.compile(r'VIEW\s+(\[[a-zA-Z]+\])?\.?\[?([a-zA-Z]+)\]?', re.IGNORECASE)
-    MSSQL_TRIGGER_PATTERN = re.compile(r'TRIGGER\s+(\[[a-zA-Z]+\])?\.?\[?([a-zA-Z]+)\]?', re.IGNORECASE)
-    MSSQL_STORED_PROC_PATTERN = re.compile(r'PROCEDURE\s+(\[[a-zA-Z]+\])?\.?\[?([a-zA-Z]+)\]?', re.IGNORECASE)
-    MSSQL_FUNCTION_PATTERN = re.compile(r'FUNCTION\s+(\[[a-zA-Z]+\])?\.?\[?([a-zA-Z]+)\]?', re.IGNORECASE)
-    MSSQL_SCALAR_F_PATTERN = re.compile(r'RETURNS\s+\b(INT|VARCHAR|FLOAT|DATETIME|CHAR|BIT|DECIMAL|NUMERIC|TEXT|NVARCHAR|BIGINT|SMALLINT|TINYINT|BINARY)\b', re.IGNORECASE)
+    MSSQL_OBJECT_PATTERN = re.compile(
+        r'(?<!\.)\b(?:dbo\.)?([a-zA-Z_][a-zA-Z0-9_]+)\b(?!\s+AS|\s+TABLE|\s+VIEW|\s+TRIGGER|\s+PROCEDURE|\s+FUNCTION)',
+        re.IGNORECASE
+    )
+
+    @staticmethod
+    def strip_comments_and_strings(script_content: str) -> str:
+        script_content = re.sub(r'--.*', '', script_content)
+        script_content = re.sub(r'/\*.*?\*/', '', script_content, flags=re.DOTALL)
+        script_content = re.sub(r"'([^']*)'", '', script_content)
+        script_content = re.sub(r'"([^"]*)"', '', script_content)
+        return script_content
+
+    def is_valid_reference(self, obj_name: str, script: "DBScript") -> bool:
+        processed_script = self.strip_comments_and_strings(script.contents)
+        pattern = re.compile(rf'\b(?:dbo\.)?{re.escape(obj_name)}\b', re.IGNORECASE)
+        valid_context_keywords = ['JOIN', 'FROM', 'INTO', 'UPDATE', 'DELETE', 'INSERT', 'EXEC', 'CALL']
+        for keyword in valid_context_keywords:
+            if re.search(rf'{keyword}\s+{pattern.pattern}', processed_script, re.IGNORECASE):
+                return True
+        return False
 
     def get_object_name(self, script_content: str) -> str | None:
-        if (m := re.search(self.MSSQL_TABLE_PATTERN, script_content)) is not None:
-            return m.group(2)
-        elif (m := re.search(self.MSSQL_VIEW_PATTERN, script_content)) is not None:
-            return m.group(2)
-        elif (m := re.search(self.MSSQL_TRIGGER_PATTERN, script_content)) is not None:
-            return m.group(2)
-        elif (m := re.search(self.MSSQL_STORED_PROC_PATTERN, script_content)) is not None:
-            return m.group(2)
-        elif (m := re.search(self.MSSQL_FUNCTION_PATTERN, script_content)) is not None:
-            return m.group(2)
-        return None
-
-    def get_script_type(self, script_content: str) -> SQLObjectScriptTypes | None:
-        if re.search(self.MSSQL_TABLE_PATTERN, script_content):
-            return SQLObjectScriptTypes.TABLE
-        elif re.search(self.MSSQL_VIEW_PATTERN, script_content):
-            return SQLObjectScriptTypes.VIEW
-        elif re.search(self.MSSQL_TRIGGER_PATTERN, script_content):
-            return SQLObjectScriptTypes.TRIGGER
-        elif re.search(self.MSSQL_STORED_PROC_PATTERN, script_content):
-            return SQLObjectScriptTypes.STORED_PROC
-        elif re.search(self.MSSQL_FUNCTION_PATTERN, script_content):
-            if re.search(self.MSSQL_SCALAR_F_PATTERN, script_content):
-                return SQLObjectScriptTypes.SCALAR_FUNC
-            else:
-                return SQLObjectScriptTypes.TABLE_FUNC
-        return None
+        match = re.search(self.MSSQL_OBJECT_PATTERN, script_content)
+        return match.group(1) if match else None
 
 
 class DBScript:
@@ -99,9 +92,8 @@ class DBScript:
         with open(self.path, 'r') as f:
             self.contents = f.read()
         self.obj_name = self.sql_dialect.get_object_name(self.contents)
-        self.script_type = self.sql_dialect.get_script_type(self.contents)
-        if self.obj_name is None or self.script_type is None:
-            raise ImproperDBScriptFormatError('Could not determine the object name and script type from the provided .sql file.')
+        if self.obj_name is None:
+            raise ImproperDBScriptFormatError('Could not determine the object name from the provided .sql file.')
 
 
 class DBScripts:
@@ -141,45 +133,44 @@ class DBScripts:
                 if filename.endswith('.sql'):
                     script = DBScript(os.path.join(dir, filename), self.sql_dialect)
                     self.append(script)
-    
+
     def calculate_dependencies(self) -> None:
+        """Creates a graph and uses Khan's Algorithm to calculate the dependencies for the script objects.
+
+        Raises:
+            CyclicalDependenciesError: raised if the resulting safe execution order is different in length to the original scripts list.
         """
-        Looks at the scripts in the collection and attempts to determine the dependency structure,
-        populating each script object's dependency array if necessary.
-        """
-        encountered_scripts: List[DBScript] = []
-        
-        def populate_script_dependencies(script: DBScript):
-            if script.dependencies:
-                return
-            for obj_name in self.obj_name_instance_mapping.keys():
-                if obj_name in script.contents and obj_name != script.obj_name:
-                    script.dependencies.append(self.obj_name_instance_mapping[obj_name])
-                    populate_script_dependencies(self.obj_name_instance_mapping[obj_name])
-                    encountered_scripts.append(script)
-                    
+        graph = defaultdict(list)
+        in_degree = defaultdict(int)
+
         for script in self.scripts:
-            if script not in encountered_scripts:
-                populate_script_dependencies(script)
+            in_degree[script.obj_name] = 0
+            for obj_name in self.obj_name_instance_mapping.keys():
+                if obj_name != script.obj_name and self.sql_dialect.is_valid_reference(obj_name, script):
+                    graph[obj_name].append(script.obj_name)
+                    in_degree[script.obj_name] += 1
+
+        self.safe_execution_order = []
+        queue = deque([script for script in self.scripts if in_degree[script.obj_name] == 0])
+
+        while queue:
+            current_script = queue.popleft()
+            self.safe_execution_order.append(current_script)
+
+            for dependent_obj_name in graph[current_script.obj_name]:
+                in_degree[dependent_obj_name] -= 1
+                if in_degree[dependent_obj_name] == 0:
+                    queue.append(self.obj_name_instance_mapping[dependent_obj_name])
+
+        if len(self.safe_execution_order) != len(self.scripts):
+            raise CyclicalDependenciesError(f"Cyclic dependencies detected!")
     
     def order_by_safe_execution(self) -> List[DBScript]:
+        """Returns the scripts list in an order such that running should avoid dependency issues.
+
+        Returns:
+            List[DBScript]: the reordered script list.
         """
-        Uses the script object's dependency arrays to determine a new order of
-        the scripts list that is safe to execute without running into missing
-        dependency issues.
-        """
-        new_order: List[DBScript] = []
-        
-        def reorder_callback(script: DBScript):
-            if script in new_order:
-                return
-            if not script.dependencies:
-                new_order.append(script)
-            else:
-                for dependency in script.dependencies:
-                    reorder_callback(dependency)
-                new_order.append(script)
-        
-        for script in self.scripts:
-            reorder_callback(script)
-        return new_order
+        if not hasattr(self, 'safe_execution_order'):
+            self.calculate_dependencies()
+        return self.safe_execution_order

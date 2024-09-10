@@ -1,2 +1,2 @@
-from .dbscripts import ImproperDBScriptFormatError, DBScript, DBScripts, MSSQL_Dialect, SQLObjectScriptTypes
+from .dbscripts import ImproperDBScriptFormatError, CyclicalDependenciesError, DBScript, DBScripts, MSSQL_Dialect
 from .dbwriter import ConnectionStringBuilderFactory, DBTypes, MSSQLConnectionStringBuilder, DBWriter

@@ -124,6 +124,7 @@ class MSSQLConnectionStringBuilder(IConnectionStringBuilder):
 
 
 class DBTypes(Enum):
+    """An enumerated type of supported database types."""
     MSSQL = 'mssql'
 
 
