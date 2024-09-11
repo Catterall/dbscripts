@@ -158,6 +158,10 @@ class DBScripts:
     def append(self, dbscript: DBScript) -> None:
         self.appender.append(self, dbscript)
     
+    def clear(self) -> None:
+        self.scripts.clear()
+        delattr(self, "_safe_execution_order")
+    
     @check_path
     def populate_from_dir(self, dir: str) -> None:
         """
