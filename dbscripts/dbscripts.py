@@ -160,7 +160,8 @@ class DBScripts:
     
     def clear(self) -> None:
         self.scripts.clear()
-        delattr(self, "_safe_execution_order")
+        if hasattr(self, '_safe_execution_order'):
+            delattr(self, "_safe_execution_order")
     
     @check_path
     def populate_from_dir(self, dir: str) -> None:
