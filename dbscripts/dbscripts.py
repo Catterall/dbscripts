@@ -182,18 +182,23 @@ class DBScripts:
         
         ! Raises a `CyclicalDependenciesError` if cyclical dependencies are detected following the dependency calculation.
         """
-        graph = defaultdict(list)
+        graph = defaultdict(list) 
         in_degree = defaultdict(int)
         
         for script in self.scripts:
+            script.dependencies = []
+
+        for script in self.scripts:
             in_degree[script.metadata.obj_name] = 0
-            for obj_name in self.obj_name_to_dbscript_mapping.keys():
+            for obj_name, dependent_script in self.obj_name_to_dbscript_mapping.items():
                 if obj_name != script.metadata.obj_name and self.flavor.is_valid_ref(obj_name, script):
-                    graph[obj_name].append(script.metadata.obj_name)
+                    graph[dependent_script.metadata.obj_name].append(script.metadata.obj_name)
                     in_degree[script.metadata.obj_name] += 1
-        
+                    script.dependencies.append(dependent_script)
+
         self._safe_execution_order: List[DBScript] = []
         queue = deque([script for script in self.scripts if in_degree[script.metadata.obj_name] == 0])
+        
         while queue:
             current = queue.popleft()
             self._safe_execution_order.append(current)
