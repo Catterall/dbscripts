@@ -51,11 +51,20 @@ class CyclicalDependenciesError(Exception):
 class DBObjectTypes(Enum):
     """
     ? An enumerated type of the different kinds of common database objects.
+    
+    - `TABLE` - a table.
+    - `VIEW` - a view.
+    - `TRIGGER` - a trigger.
+    - `STORED_PROCEDURE` - a stored procedure.
+    - `FUNCTION` - a generalzed type for functions; used when the type of function cannot be determined.
+    - `SCALAR_FUNCTION` - a scalar function.
+    - `TABLE_FUNCTION` - a table function.
     """
     TABLE = "table"
     VIEW = "view"
     TRIGGER = "trigger"
     STORED_PROCEDURE = "stored procedure"
+    FUNCTION = "function"
     SCALAR_FUNCTION = "scalar function"
     TABLE_FUNCTION = "table function"
 
@@ -245,8 +254,9 @@ class DBFlavor_MSSQL(IDBFlavor):
         DBObjectTypes.TABLE: re.compile(r'CREATE\s+(OR\s+ALTER\s+)?TABLE\s+\[([a-zA-Z0-9_]+)\]\.\[([a-zA-Z0-9_]+)\]', re.IGNORECASE),
         DBObjectTypes.VIEW: re.compile(r'CREATE\s+(OR\s+ALTER\s+)?VIEW\s+\[([a-zA-Z0-9_]+)\]\.\[([a-zA-Z0-9_]+)\]', re.IGNORECASE),
         DBObjectTypes.TRIGGER: re.compile(r'CREATE\s+(OR\s+ALTER\s+)?TRIGGER\s+\[([a-zA-Z0-9_]+)\]\.\[([a-zA-Z0-9_]+)\]', re.IGNORECASE),
-        DBObjectTypes.TABLE_FUNCTION: re.compile(r'CREATE\s+(OR\s+ALTER\s+)?FUNCTION\s+\[([a-zA-Z0-9_]+)\]\.\[([a-zA-Z0-9_]+)\]\s*\([\w\s,@]*\)\s*RETURNS\s+TABLE', re.IGNORECASE),
-        DBObjectTypes.SCALAR_FUNCTION: re.compile(r'CREATE\s+(OR\s+ALTER\s+)?FUNCTION\s+\[([a-zA-Z0-9_]+)\]\.\[([a-zA-Z0-9_]+)\]\s*\([\w\s,@]*\)\s*RETURNS\s+[a-zA-Z]', re.IGNORECASE),
+        DBObjectTypes.FUNCTION: re.compile(r'CREATE\s+(OR\s+ALTER\s+)?FUNCTION\s+\[([a-zA-Z0-9_]+)\]\.\[([a-zA-Z0-9_]+)\]', re.IGNORECASE),
+        DBObjectTypes.SCALAR_FUNCTION: re.compile(r'RETURNS\s+(?!TABLE)\w+', re.IGNORECASE),  #* Search for general FUNCTION first.
+        DBObjectTypes.TABLE_FUNCTION: re.compile(r'RETURNS\s+(?=TABLE)\w+', re.IGNORECASE),  #* Search for general FUNCTION first.
         DBObjectTypes.STORED_PROCEDURE: re.compile(r'CREATE\s+(OR\s+ALTER\s+)?PROCEDURE\s+\[([a-zA-Z0-9_]+)\]\.\[([a-zA-Z0-9_]+)\]', re.IGNORECASE)
     }
     valid_context_keywords = ('JOIN', 'FROM', 'INTO', 'UPDATE', 'DELETE', 'INSERT', 'EXEC', 'CALL')
@@ -258,10 +268,15 @@ class DBFlavor_MSSQL(IDBFlavor):
             return DBScriptMetadata(m.group(3), DBObjectTypes.VIEW, m.group(2))
         elif (m := re.search(self.patterns[DBObjectTypes.TRIGGER], dbscript.contents)):
             return DBScriptMetadata(m.group(3), DBObjectTypes.TRIGGER, m.group(2))
-        elif (m := re.search(self.patterns[DBObjectTypes.TABLE_FUNCTION], dbscript.contents)):
-            return DBScriptMetadata(m.group(3), DBObjectTypes.TABLE_FUNCTION, m.group(2))
-        elif (m := re.search(self.patterns[DBObjectTypes.SCALAR_FUNCTION], dbscript.contents)):
-            return DBScriptMetadata(m.group(3), DBObjectTypes.SCALAR_FUNCTION, m.group(2))
+        elif (m := re.search(self.patterns[DBObjectTypes.FUNCTION], dbscript.contents)):
+            obj_name, obj_schema = m.group(3), m.group(2)
+            if (m := re.search(self.patterns[DBObjectTypes.TABLE_FUNCTION], dbscript.contents)):
+                obj_type = DBObjectTypes.TABLE_FUNCTION
+            elif (m := re.search(self.patterns[DBObjectTypes.SCALAR_FUNCTION], dbscript.contents)):
+                obj_type = DBObjectTypes.SCALAR_FUNCTION
+            else:
+                obj_type = DBObjectTypes.FUNCTION
+            return DBScriptMetadata(obj_name, obj_type, obj_schema)
         elif (m := re.search(self.patterns[DBObjectTypes.STORED_PROCEDURE], dbscript.contents)):
             return DBScriptMetadata(m.group(3), DBObjectTypes.STORED_PROCEDURE, m.group(2))
         else:
