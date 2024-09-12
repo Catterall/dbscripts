@@ -155,13 +155,28 @@ class DBScripts:
         self.scripts: List[DBScript] = []
         self.obj_name_to_dbscript_mapping: Dict[str, DBScript] = {}
     
+    #* APPEND/CLEAR/REMOVE - Use these instead of self.scripts.append, self.scripts.clear, self.scripts.clear
+    #* to force the recalculation of dependencies when getting a safe exectuion order following modification.
+    
     def append(self, dbscript: DBScript) -> None:
         self.appender.append(self, dbscript)
+        if hasattr(self, '_safe_execution_order'):
+            delattr(self, "_safe_execution_order")
     
     def clear(self) -> None:
         self.scripts.clear()
+        self.obj_name_to_dbscript_mapping = {}
         if hasattr(self, '_safe_execution_order'):
             delattr(self, "_safe_execution_order")
+    
+    def remove(self, dbscript: DBScript) -> None:
+        try:
+            self.scripts.remove(dbscript)
+            self.obj_name_to_dbscript_mapping.pop(dbscript.metadata.obj_name)
+            if hasattr(self, '_safe_execution_order'):
+                delattr(self, "_safe_execution_order")
+        except (ValueError, KeyError):
+            return
     
     @check_path
     def populate_from_dir(self, dir: str) -> None:
@@ -210,17 +225,13 @@ class DBScripts:
         if len(self._safe_execution_order) != len(self.scripts):
             raise CyclicalDependenciesError('Cyclical dependencies were detected when calculating dependencies within the DBScript collection.')
 
-    def safe_execution_order(self, recalculate_dependencies: bool) -> List[DBScript]:
+    def safe_execution_order(self) -> List[DBScript]:
         """
         ? Returns the list of `DBScript` instances in the collection in an order safe to execute without missing dependencies.
         
         ! Note that, if some dependencies were not included in the `DBScripts` instance to begin with, these will not be accounted for! 
         """
-        b = False
         if not hasattr(self, '_safe_execution_order'):
-            self.calculate_dependencies()
-            b = True
-        if recalculate_dependencies and not b:
             self.calculate_dependencies()
         return self._safe_execution_order
 

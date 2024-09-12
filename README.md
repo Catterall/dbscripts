@@ -72,7 +72,7 @@ scripts.append(script_b)
 for script in scripts.scripts:
     print(script.metadata.obj_name)
 
-for script in scripts.safe_execution_order(recalculate_dependencies=False):
+for script in scripts.safe_execution_order():
     print(script.metadata.obj_name)
 ```
 
@@ -110,5 +110,5 @@ conn = pyodbc.connect('your_connection_string')
 writer = DBWriter(conn)
 scripts = DBScripts(DBFlavor_MSSQL(), DBScriptsAppendRegular())
 scripts.populate_from_dir('./your_database_scripts_directory')
-writer.execute_scripts(scripts.safe_execution_order(recalculate_dependencies=False), raise_exceptions=True)
+writer.execute_scripts(scripts.safe_execution_order(), raise_exceptions=True)
 ```
