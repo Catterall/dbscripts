@@ -2,22 +2,12 @@ import os
 import re
 from abc import ABC, abstractmethod
 from collections import deque, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List
 
-
-def check_path(func):
-    """
-    ? A decorator for raising an OSError if a path argument does not exist.
-    
-    ! The path argument MUST be the first argument of the method.
-    """
-    def wrapper(*args, **kwargs):
-        if not os.path.exists(args[1]):
-            raise OSError(f'The provided path, "{args[1]}", could not be found.')
-        return func(*args, **kwargs)
-    return wrapper
+from dbscripts.utils import check_path
 
 
 class InvalidDBScriptFormatError(Exception):
@@ -185,57 +175,126 @@ class DBScripts:
         
         ! You must ensure that all `.sql` files in the directory are 'database scripts' as formatted with the starting format of the `IDBFlavor` implementation used.
         """
+        self.clear()
         for _, _, filenames in os.walk(dir):
             for filename in filenames:
                 filename = filename.strip()
                 if filename.endswith('.sql'):
                     self.append(DBScript(os.path.join(dir, filename), self.flavor))
     
+    @check_path
+    def append_from_dir(self, dir: str) -> None:
+        """
+        ? Appends the collection of `DBScript` instances with an instance for every .sql file in a directory.
+        
+        ! You must ensure that all `.sql` files in the directory are 'database scripts' as formatted with the starting format of the `IDBFlavor` implementation used.
+        """
+        for _, _, filenames in os.walk(dir):
+            for filename in filenames:
+                filename = filename.strip()
+                if filename.endswith('.sql'):
+                    self.append(DBScript(os.path.join(dir, filename), self.flavor))
+    
+    
+    #* Methods for Dependency Calculation
+    
+    def _preprocess_references(self, script: DBScript) -> Dict[str, DBScript]:
+        """
+        ? Pre-process references to avoid repeated regex calls.
+        """
+        return {
+            obj_name: dependent_script
+            for obj_name, dependent_script in self.obj_name_to_dbscript_mapping.items()
+            if obj_name != script.metadata.obj_name and self.flavor.is_valid_ref(obj_name, script)
+        }
+    
+    def _build_dependency_graph(self, preprocessed_references: Dict[str, Dict[str, DBScript]]):
+        """
+        ? Builds a dependency graph using preprocessed references.
+        """
+        graph = defaultdict(list)
+        in_degree = defaultdict(int)
+        
+        for script in self.scripts:
+            script.dependencies = set()
+            obj_name = script.metadata.obj_name
+            in_degree[obj_name] = 0
+            
+            for dependent_script in preprocessed_references[obj_name].values():
+                dep_obj_name = dependent_script.metadata.obj_name
+                if dependent_script not in script.dependencies:
+                    graph[dep_obj_name].append(obj_name)
+                    in_degree[obj_name] += 1
+                    script.dependencies.add(dependent_script)
+
+        return graph, in_degree
+    
+    def _parallel_references_preprocess(self):
+        """
+        ? Parallelizes the preprocessing of references using a thread pool.
+        """
+        preprocessed_references = {}
+        with ThreadPoolExecutor() as executor:
+            futures = {executor.submit(self._preprocess_references, script): script for script in self.scripts}
+            for future in futures:
+                script = futures[future]
+                preprocessed_references[script.metadata.obj_name] = future.result()
+        return preprocessed_references
+
     def calculate_dependencies(self) -> None:
         """
         ? Populates the dependencies attribute for all the `DBScript` instances in the collection via Khan's topological sort.
         
         ! Raises a `CyclicalDependenciesError` if cyclical dependencies are detected following the dependency calculation.
         """
-        graph = defaultdict(list) 
-        in_degree = defaultdict(int)
-        
-        for script in self.scripts:
-            script.dependencies = []
-
-        for script in self.scripts:
-            in_degree[script.metadata.obj_name] = 0
-            for obj_name, dependent_script in self.obj_name_to_dbscript_mapping.items():
-                if obj_name != script.metadata.obj_name and self.flavor.is_valid_ref(obj_name, script):
-                    graph[dependent_script.metadata.obj_name].append(script.metadata.obj_name)
-                    in_degree[script.metadata.obj_name] += 1
-                    script.dependencies.append(dependent_script)
-
+        preprocessed_references = self._parallel_references_preprocess()
+        graph, in_degree = self._build_dependency_graph(preprocessed_references)
         self._safe_execution_order: List[DBScript] = []
         queue = deque([script for script in self.scripts if in_degree[script.metadata.obj_name] == 0])
-        
+
         while queue:
             current = queue.popleft()
             self._safe_execution_order.append(current)
+
             for dependent_obj_name in graph[current.metadata.obj_name]:
                 in_degree[dependent_obj_name] -= 1
                 if in_degree[dependent_obj_name] == 0:
                     queue.append(self.obj_name_to_dbscript_mapping[dependent_obj_name])
-        
+
         if len(self._safe_execution_order) != len(self.scripts):
             raise CyclicalDependenciesError('Cyclical dependencies were detected when calculating dependencies within the DBScript collection.')
-
+    
+    def uses_dependencies(func):
+        def wrapper(self: DBScripts, *args, **kwargs):
+            if not hasattr(self, '_safe_execution_order'):
+                self.calculate_dependencies()
+            return func(self, *args, **kwargs)
+        return wrapper
+    
+    @uses_dependencies    
     def safe_execution_order(self) -> List[DBScript]:
         """
         ? Returns the list of `DBScript` instances in the collection in an order safe to execute without missing dependencies.
         
         ! Note that, if some dependencies were not included in the `DBScripts` instance to begin with, these will not be accounted for! 
         """
-        if not hasattr(self, '_safe_execution_order'):
-            self.calculate_dependencies()
         return self._safe_execution_order
 
+    @uses_dependencies
+    def get_dependents(self, script: DBScript) -> List[DBScript]:
+        """
+        ? Returns a list of DBScript instances that have the given script as a dependency.
+        """
+        dependents = []
+        for s in self.scripts:
+            if script in s.dependencies:
+                dependents.append(s)
+        return dependents
 
+    def __iter__(self):
+        return iter(self.scripts)
+    
+    
 class IDBFlavor(ABC):
     @abstractmethod
     def get_dbscript_metadata(self, dbscript: DBScript) -> DBScriptMetadata:
@@ -253,6 +312,13 @@ class IDBFlavor(ABC):
         ? Returns the contents of a database script with comments and string literals removed.
         """
         pass
+    
+    @staticmethod
+    @abstractmethod
+    def extract_relevant_sections(contents: str) -> str:
+        """
+        ? Used by is_valid_ref - removes static noise.
+        """
     
     @abstractmethod
     def is_valid_ref(self, obj_name: str, dbscript: DBScript) -> bool:
@@ -281,6 +347,7 @@ class DBFlavor_MSSQL(IDBFlavor):
         DBObjectTypes.STORED_PROCEDURE: re.compile(r'CREATE\s+(OR\s+ALTER\s+)?PROCEDURE\s+\[([a-zA-Z0-9_]+)\]\.\[([a-zA-Z0-9_]+)\]', re.IGNORECASE)
     }
     valid_context_keywords = ('JOIN', 'FROM', 'INTO', 'UPDATE', 'DELETE', 'INSERT', 'EXEC', 'CALL')
+    keywords_pattern = '|'.join(map(re.escape, valid_context_keywords))
     
     def get_dbscript_metadata(self, dbscript: "DBScript") -> DBScriptMetadata:
         if (m := re.search(self.patterns[DBObjectTypes.TABLE], dbscript.contents)):
@@ -311,14 +378,22 @@ class DBFlavor_MSSQL(IDBFlavor):
         contents = re.sub(r'"([^"]*)"', '', contents)
         return contents
     
+    @staticmethod
+    def extract_relevant_sections(contents: str) -> str:
+        relevant_lines = []
+        for line in contents.splitlines():
+            if any(keyword in line for keyword in ('JOIN', 'FROM', 'EXEC', 'INTO', 'UPDATE', 'DELETE', 'INSERT')):
+                relevant_lines.append(line)
+        return '\n'.join(relevant_lines)
+    
     def is_valid_ref(self, obj_name: str, dbscript: DBScript) -> bool:
         processed_script = self.cleaned_contents(dbscript.contents)
+        processed_script = self.extract_relevant_sections(processed_script)
         escaped_obj_name = re.escape(obj_name)
-        pattern = re.compile(
-            rf"([a-zA-Z0-9_]+|\[[a-zA-Z0-9_]+\])\.({escaped_obj_name}|\[{escaped_obj_name}\])|({escaped_obj_name}|\[{escaped_obj_name}\])", 
+        combined_pattern = re.compile(
+            rf'(\[?[a-zA-Z0-9_]+\]?\.)?'
+            rf'({escaped_obj_name}|\[{escaped_obj_name}\])'
+            rf'\s+({self.keywords_pattern})',
             re.IGNORECASE
         )
-        for keyword in self.valid_context_keywords:
-            if re.search(rf'{keyword}\s+{pattern.pattern}', processed_script, re.IGNORECASE):
-                return True
-        return False
+        return bool(combined_pattern.search(processed_script))

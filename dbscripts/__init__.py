@@ -1,2 +1,3 @@
 from .dbscripts import InvalidDBScriptFormatError, NotMatchingDBFlavorError, DBScriptAlreadyPresentError, CyclicalDependenciesError, DBObjectTypes, DBScriptMetadata, DBScript, DBScriptsAppendRegular, DBScriptsAppendIgnoreDuplicates, DBScriptsAppendErrorOnDuplicates, DBScripts, DBFlavor_MSSQL
 from .dbwriter import DBWriter, MSSQLConnectionStringBuilder, DBTypes, ConnectionStringBuilderFactory
+from .utils import check_path
