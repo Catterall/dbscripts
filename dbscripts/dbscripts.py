@@ -265,7 +265,7 @@ class DBScripts:
             raise CyclicalDependenciesError('Cyclical dependencies were detected when calculating dependencies within the DBScript collection.')
     
     def uses_dependencies(func):
-        def wrapper(self: DBScripts, *args, **kwargs):
+        def wrapper(self: "DBScripts", *args, **kwargs):
             if not hasattr(self, '_safe_execution_order'):
                 self.calculate_dependencies()
             return func(self, *args, **kwargs)
